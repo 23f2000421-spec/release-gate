@@ -15,7 +15,11 @@ export default {
   async fetch(request) {
     const url = new URL(request.url);
 
-    if (url.pathname !== "/release-gate") {
+    if (request.method === "GET" && url.pathname === "/") {
+      return jsonResponse({ service: "release-gate", version: "2026-08-10.2" });
+    }
+
+    if (!["/release-gate", "/release-gate/"].includes(url.pathname)) {
       return jsonResponse({ error: "not_found" }, 404);
     }
 

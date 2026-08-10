@@ -34,12 +34,22 @@ function booleanValue(value) {
     return value;
   }
 
-  if (typeof value === "string") {
-    if (lowerText(value) === "true") {
+  if (typeof value === "number") {
+    if (value === 1) {
       return true;
     }
 
-    if (lowerText(value) === "false") {
+    if (value === 0) {
+      return false;
+    }
+  }
+
+  if (typeof value === "string") {
+    if (["true", "yes", "1"].includes(lowerText(value))) {
+      return true;
+    }
+
+    if (["false", "no", "0"].includes(lowerText(value))) {
       return false;
     }
   }
@@ -59,10 +69,28 @@ function numberValue(value) {
   return Number.NaN;
 }
 
+function read(obj, names) {
+  for (const name of names) {
+    if (Object.hasOwn(obj ?? {}, name)) {
+      return obj[name];
+    }
+  }
+
+  return undefined;
+}
+
+function normalizePermissionKey(key) {
+  return lowerText(key).replaceAll("_", "-");
+}
+
 function hasExactReleasePermissions(permissions = {}) {
+  if (!permissions || typeof permissions !== "object" || Array.isArray(permissions)) {
+    return false;
+  }
+
   const normalized = Object.fromEntries(
     Object.entries(permissions ?? {}).map(([key, value]) => [
-      lowerText(key),
+      normalizePermissionKey(key),
       lowerText(value)
     ])
   );
@@ -75,13 +103,35 @@ function hasExactReleasePermissions(permissions = {}) {
   );
 }
 
+function actionParts(action) {
+  if (typeof action === "string") {
+    const [left, ref = ""] = action.split("@");
+    const [owner = "", name = ""] = left.split("/");
+    return { owner, name, ref };
+  }
+
+  if (typeof action?.uses === "string") {
+    return actionParts(action.uses);
+  }
+
+  return {
+    owner: action?.owner,
+    name: action?.name,
+    ref: action?.ref
+  };
+}
+
 function hasMutableThirdPartyAction(actions = []) {
-  return actions.some((action) => {
-    if (!action || lowerText(action.owner) === "actions") {
+  const list = Array.isArray(actions) ? actions : Object.values(actions ?? {});
+
+  return list.some((action) => {
+    const parsed = actionParts(action);
+
+    if (!action || lowerText(parsed.owner) === "actions") {
       return false;
     }
 
-    return !FULL_LOWERCASE_SHA.test(text(action.ref));
+    return !FULL_LOWERCASE_SHA.test(text(parsed.ref));
   });
 }
 
@@ -89,60 +139,85 @@ export function evaluateReleaseGate(payload = {}) {
   const workflow = payload.workflow ?? {};
   const image = payload.image ?? {};
   const violations = [];
+  const target = lowerText(read(payload, ["target"]));
+  const event = lowerText(read(payload, ["event"]));
+  const ref = text(read(payload, ["ref"]));
+  const trigger = lowerText(read(workflow, ["trigger"]));
+  const permissions = read(workflow, ["permissions"]);
+  const testsPass = read(workflow, ["testsPass", "tests_pass", "tests_passed"]);
+  const matrixComplete = read(workflow, [
+    "matrixComplete",
+    "matrix_complete",
+    "matrixFinished",
+    "matrix_finished"
+  ]);
+  const failFast = read(workflow, ["failFast", "fail_fast"]);
+  const environmentApproval = read(workflow, [
+    "environmentApproval",
+    "environment_approval",
+    "approval"
+  ]);
+  const actions = read(workflow, ["actions", "uses"]);
+  const multiStage = read(image, ["multiStage", "multi_stage"]);
+  const runsAsRoot = read(image, ["runsAsRoot", "runs_as_root", "root"]);
+  const secretMode = read(image, ["secretMode", "secret_mode", "buildSecret", "build_secret"]);
+  const criticalVulnerabilities = read(image, [
+    "criticalVulnerabilities",
+    "critical_vulnerabilities",
+    "criticalCVEs",
+    "critical_cves"
+  ]);
+  const digestPinned = read(image, ["digestPinned", "digest_pinned", "pinnedByDigest"]);
 
-  if (!hasExactReleasePermissions(workflow.permissions)) {
+  if (!hasExactReleasePermissions(permissions)) {
     violations.push(CODES.EXCESS_PERMISSION);
   }
 
   if (
-    lowerText(workflow.trigger) === "pull_request_target" ||
-    (lowerText(payload.event) === "pull_request" &&
-      lowerText(workflow.trigger) !== "pull_request")
+    trigger === "pull_request_target" ||
+    (event === "pull_request" && trigger !== "pull_request")
   ) {
     violations.push(CODES.UNSAFE_PR_TRIGGER);
   }
 
   if (
-    booleanValue(workflow.testsPass) !== true ||
-    booleanValue(workflow.matrixComplete) !== true ||
-    booleanValue(workflow.failFast) !== false
+    booleanValue(testsPass) !== true ||
+    booleanValue(matrixComplete) !== true ||
+    booleanValue(failFast) !== false
   ) {
     violations.push(CODES.TESTS_INCOMPLETE);
   }
 
-  if (hasMutableThirdPartyAction(workflow.actions)) {
+  if (hasMutableThirdPartyAction(actions)) {
     violations.push(CODES.MUTABLE_ACTION);
   }
 
-  if (booleanValue(image.multiStage) !== true) {
+  if (booleanValue(multiStage) !== true) {
     violations.push(CODES.SINGLE_STAGE_IMAGE);
   }
 
-  if (booleanValue(image.runsAsRoot) !== false) {
+  if (booleanValue(runsAsRoot) !== false) {
     violations.push(CODES.ROOT_RUNTIME);
   }
 
-  if (!ALLOWED_SECRET_MODES.has(lowerText(image.secretMode))) {
+  if (!ALLOWED_SECRET_MODES.has(lowerText(secretMode))) {
     violations.push(CODES.SECRET_IN_LAYER);
   }
 
-  if (numberValue(image.criticalVulnerabilities) !== 0) {
+  if (numberValue(criticalVulnerabilities) !== 0) {
     violations.push(CODES.CRITICAL_CVE);
   }
 
-  if (booleanValue(image.digestPinned) !== true) {
+  if (booleanValue(digestPinned) !== true) {
     violations.push(CODES.UNPINNED_IMAGE);
   }
 
-  if (lowerText(payload.target) === "production") {
-    if (
-      lowerText(payload.event) !== "push" ||
-      text(payload.ref) !== "refs/heads/main"
-    ) {
+  if (target === "production") {
+    if (event !== "push" || ref !== "refs/heads/main") {
       violations.push(CODES.INVALID_PRODUCTION_REF);
     }
 
-    if (booleanValue(workflow.environmentApproval) !== true) {
+    if (booleanValue(environmentApproval) !== true) {
       violations.push(CODES.APPROVAL_REQUIRED);
     }
   }

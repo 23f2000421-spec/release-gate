@@ -181,3 +181,53 @@ test("normalizes string values used by external probes", () => {
     violations: []
   });
 });
+
+test("accepts snake_case safe payload fields", () => {
+  const result = evaluateReleaseGate({
+    target: "preview",
+    event: "pull_request",
+    ref: "refs/heads/feature",
+    workflow: {
+      trigger: "pull_request",
+      permissions: {
+        contents: "read",
+        packages: "write",
+        id_token: "none"
+      },
+      tests_pass: true,
+      matrix_complete: true,
+      fail_fast: false,
+      actions: [
+        "actions/checkout@v4",
+        "docker/login-action@abcdefabcdefabcdefabcdefabcdefabcdefabcd"
+      ]
+    },
+    image: {
+      multi_stage: true,
+      runs_as_root: false,
+      secret_mode: "none",
+      critical_vulnerabilities: 0,
+      digest_pinned: true
+    }
+  });
+
+  assert.deepEqual(result, {
+    decision: "promote",
+    violations: []
+  });
+});
+
+test("flags mutable third-party uses strings", () => {
+  const result = evaluateReleaseGate({
+    ...safePreviewPayload,
+    workflow: {
+      ...safePreviewPayload.workflow,
+      actions: ["actions/checkout@v4", "some-owner/some-action@v1"]
+    }
+  });
+
+  assert.deepEqual(result, {
+    decision: "block",
+    violations: ["MUTABLE_ACTION"]
+  });
+});
