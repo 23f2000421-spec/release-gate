@@ -1,0 +1,31 @@
+name: TDS GA7 Release Gate
+
+on:
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    name: release-gate tests
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: TDS identity 23f2000421@ds.study.iitm.ac.in
+        run: echo "23f2000421@ds.study.iitm.ac.in"
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+
+      - name: Install dependencies
+        run: npm install
+
+      - name: Test release gate
+        run: npm test
