@@ -141,3 +141,43 @@ test("blocks pull_request_target even when event fields are inconsistent", () =>
   assert.equal(result.decision, "block");
   assert.ok(result.violations.includes("UNSAFE_PR_TRIGGER"));
 });
+
+test("normalizes string values used by external probes", () => {
+  const result = evaluateReleaseGate({
+    target: "production",
+    event: "push",
+    ref: "refs/heads/main",
+    workflow: {
+      trigger: "push",
+      permissions: {
+        contents: "read",
+        packages: "write",
+        "id-token": "none"
+      },
+      testsPass: "true",
+      matrixComplete: "true",
+      failFast: "false",
+      environmentApproval: "true",
+      actions: [
+        { owner: "Actions", name: "checkout", ref: "v4" },
+        {
+          owner: "docker",
+          name: "metadata-action",
+          ref: "abcdefabcdefabcdefabcdefabcdefabcdefabcd"
+        }
+      ]
+    },
+    image: {
+      multiStage: "true",
+      runsAsRoot: "false",
+      secretMode: "BuildKit",
+      criticalVulnerabilities: "0",
+      digestPinned: "true"
+    }
+  });
+
+  assert.deepEqual(result, {
+    decision: "promote",
+    violations: []
+  });
+});
